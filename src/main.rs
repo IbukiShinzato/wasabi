@@ -160,7 +160,13 @@ fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
         let _ = draw_line(&mut vram, 0xffffff, cx, cy, i, rect_size);
     }
 
+    for (i, c) in "ABCDEF".chars().enumerate() {
+        draw_font_fg(&mut vram, i as i64 * 16 + 256, i as i64 * 16, 0xffffff, c);
+    }
+
     // println!("Hello, world!");
+    draw_str_fg(&mut vram, 256, 256, 0xffffff, "Hello, World!");
+
     loop {
         hlt();
     }
@@ -310,4 +316,62 @@ fn draw_line<T: Bitmap>(buf: &mut T, color: u32, x0: i64, y0: i64, x1: i64, y1: 
     }
 
     Ok(())
+}
+
+fn draw_font_fg<T: Bitmap>(buf: &mut T, x: i64, y: i64, color: u32, c: char) {
+    if let Some(font) = lookup_font(c) {
+        for (dy, row) in font.iter().enumerate() {
+            for (dx, pixel) in row.iter().enumerate() {
+                let color = match pixel {
+                    '*' => color,
+                    _ => continue,
+                };
+                let _ = draw_point(buf, color, x + dx as i64, y + dy as i64);
+            }
+        }
+    }
+}
+
+fn lookup_font(c: char) -> Option<[[char; 8]; 16]> {
+    // fileの中身を取得
+    const FONT_SOURCE: &str = include_str!("./font.txt");
+
+    if let Ok(c) = u8::try_from(c) {
+        // fileの中身を改行で分割
+        let mut fi = FONT_SOURCE.split('\n');
+
+        // 文字列がある行までloop
+        while let Some(line) = fi.next() {
+            // 文字列から"0x"を取り除く
+            // デフォルトでは0x41の下にAのドット絵が描かれている
+            // これを41のみにして10進数表記に変更
+            if let Some(line) = line.strip_prefix("0x") {
+                // 16進数表記 -> 10進数表記
+                if let Ok(idx) = u8::from_str_radix(line, 16) {
+                    if idx != c {
+                        continue;
+                    }
+                    let mut font = [['*'; 8]; 16];
+                    for (y, line) in fi.clone().take(16).enumerate() {
+                        for (x, c) in line.chars().enumerate() {
+                            // デフォルトでは全て'*'なので'.'に置き換えるところは置き換える
+                            if let Some(e) = font[y].get_mut(x) {
+                                *e = c;
+                            }
+                        }
+                    }
+                    return Some(font);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+// 文字列の入力を描く
+fn draw_str_fg<T: Bitmap>(buf: &mut T, x: i64, y: i64, color: u32, s: &str) {
+    for (i, c) in s.chars().enumerate() {
+        draw_font_fg(buf, x + i as i64 * 8, y, color, c)
+    }
 }
