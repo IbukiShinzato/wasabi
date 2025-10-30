@@ -3,10 +3,13 @@
 
 use core::arch::asm;
 use core::cmp::min;
+use core::fmt;
+use core::fmt::Write;
 use core::mem::offset_of;
 use core::mem::size_of;
 use core::panic::PanicInfo;
 use core::ptr::null_mut;
+use core::writeln;
 
 type EfiVoid = u8;
 type EfiHandle = u64;
@@ -35,10 +38,109 @@ enum EfiStatus {
     Success = 0,
 }
 
+#[repr(i64)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+// そのディスクリプタが示すメモリ領域の種類
+pub enum EfiMemoryType {
+    RESERVED = 0,
+    LOADER_CODE,
+    LOADER_DATA,
+    BOOT_SERVICES_CODE,
+    BOOT_SERVICES_DATA,
+    RUNTIME_SERVICES_CODE,
+    RUNTIME_SERVICES_DATA,
+    // 通常のDRAMとして使える領域
+    CONVENTIONAL_MEMORY,
+    UNUSABLE_MEMORY,
+    ACPI_RECLAIM_MEMORY,
+    ACPI_MEMORY_NVS,
+    MEMORY_MAPPED_IO,
+    MEMORY_MAPPED_IO_PORT_SPACE,
+    PAL_CODE,
+    PRESISTENT_MEMORY,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct EfiMemoryDescriptor {
+    memory_type: EfiMemoryType,
+    physical_start: u64,
+    virtual_start: u64,
+    number_of_pages: u64,
+    attribute: u64,
+}
+
+const MEMORY_MAP_BUFFER_SIZE: usize = 0x8000;
+
+struct MemoryMapHolder {
+    memory_map_buffer: [u8; MEMORY_MAP_BUFFER_SIZE],
+    memory_map_size: usize,
+    map_key: usize,
+    descripter_size: usize,
+    descripter_version: u32,
+}
+struct MemoryMapIterator<'a> {
+    map: &'a MemoryMapHolder,
+    ofs: usize,
+}
+impl<'a> Iterator for MemoryMapIterator<'a> {
+    type Item = &'a EfiMemoryDescriptor;
+    fn next(&mut self) -> Option<&'a EfiMemoryDescriptor> {
+        if self.ofs >= self.map.memory_map_size {
+            None
+        } else {
+            let e: &EfiMemoryDescriptor = unsafe {
+                &*(self.map.memory_map_buffer.as_ptr().add(self.ofs) as *const EfiMemoryDescriptor)
+            };
+            self.ofs += self.map.descripter_size;
+            Some(e)
+        }
+    }
+}
+
+impl MemoryMapHolder {
+    pub const fn new() -> MemoryMapHolder {
+        MemoryMapHolder {
+            memory_map_buffer: [0; MEMORY_MAP_BUFFER_SIZE],
+            memory_map_size: MEMORY_MAP_BUFFER_SIZE,
+            map_key: 0,
+            descripter_size: 0,
+            descripter_version: 0,
+        }
+    }
+
+    pub fn iter(&self) -> MemoryMapIterator<'_> {
+        MemoryMapIterator { map: self, ofs: 0 }
+    }
+}
+
 #[repr(C)]
 // EFIブートサービステーブル
 struct EfiBootServicesTable {
-    _reserved0: [u64; 40],
+    _reserved0: [u64; 7],
+    ///
+    /// typedef
+    /// EFI_STATUS
+    /// (EFIAPI \*EFI_GET_MEMORY_MAP) (
+    ///     IN OUT UINTN                  *MemoryMapSize,
+    ///     OUT EFI_MEMORY_DESCRIPTOR     *MemoryMap,
+    ///     OUT UINTN                     *MapKey,
+    ///     OUT UINTN                     *DescriptorSize,
+    ///     OUT UINT32                    *DescriptorVersion,
+    /// );
+    ///
+    // メモリマップを取得するAPI
+    get_memory_map: extern "C" fn(
+        memory_map_size: *mut usize,
+        memory_map: *mut u8,
+        map_key: *mut usize,
+        descripter_size: *mut usize,
+        descripter_version: *mut u32,
+    ) -> EfiStatus,
+    _reserved1: [u64; 21],
+    exit_boot_services: extern "C" fn(image_handle: EfiHandle, map_key: usize) -> EfiStatus,
+    _reserved4: [u64; 10],
     // x86_64環境では関数呼び出し規約がWindows ABIに従うため、extern "win64"を指定したいがRustではサポートされていないため、extern "C"を使用する
     locate_protocol: extern "C" fn(
         protocol: *const EfiGuid,
@@ -46,6 +148,23 @@ struct EfiBootServicesTable {
         interface: *mut *mut EfiVoid,
     ) -> EfiStatus,
 }
+impl EfiBootServicesTable {
+    fn get_memory_map(&self, map: &mut MemoryMapHolder) -> EfiStatus {
+        (self.get_memory_map)(
+            &mut map.memory_map_size,
+            map.memory_map_buffer.as_mut_ptr(),
+            &mut map.map_key,
+            &mut map.descripter_size,
+            &mut map.descripter_version,
+        )
+    }
+}
+// offset_of!マクロを使用することによって、get_memory_mapのオフセットが56であることを確認する
+const _: () = assert!(offset_of!(EfiBootServicesTable, get_memory_map) == 56);
+
+// offset_of!マクロを使用することによって、exit_boot_serviceのオフセットが56であることを確認する
+const _: () = assert!(offset_of!(EfiBootServicesTable, exit_boot_services) == 232);
+
 // offset_of!マクロを使用することによって、locate_protocolのオフセットが320であることを確認する
 const _: () = assert!(offset_of!(EfiBootServicesTable, locate_protocol) == 320);
 
@@ -118,55 +237,45 @@ pub fn hlt() {
 }
 
 #[no_mangle]
-fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
+fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     let mut vram = init_vram(efi_system_table).expect("init_vram failed");
 
     let vw = vram.width;
     let vh = vram.height;
     fill_rect(&mut vram, 0x000000, 0, 0, vw, vh).expect("fill_rect failed");
-    fill_rect(&mut vram, 0xff0000, 32, 32, 32, 32).expect("fill_rect failed");
-    fill_rect(&mut vram, 0x00ff00, 64, 64, 64, 64).expect("fill_rect failed");
-    fill_rect(&mut vram, 0x0000ff, 128, 128, 128, 128).expect("fill_rect failed");
-    for i in 0..256 {
-        // 斜め線を描画
-        // 0x010101はRGB各色が1ずつ増加することを意味する
-        let _ = draw_point(&mut vram, 0x010101 * i as u32, i, i);
+
+    draw_test_pattern(&mut vram);
+
+    let mut w = VramTextWriter::new(&mut vram);
+    for i in 0..4 {
+        writeln!(w, "i = {}", i).unwrap();
     }
 
-    // 反対方向も作成
-    fill_rect(&mut vram, 0xff0000, 192, 32, 32, 32).expect("fill_rect failed");
-    fill_rect(&mut vram, 0x00ff00, 128, 64, 64, 64).expect("fill_rect failed");
-    fill_rect(&mut vram, 0x0000ff, 0, 128, 128, 128).expect("fill_rect failed");
-    for i in 0..256 {
-        let _ = draw_point(&mut vram, 0x010101 * (256 - i) as u32, 256 - i, i);
+    let mut memory_map = MemoryMapHolder::new();
+    let status = efi_system_table
+        .boot_services
+        .get_memory_map(&mut memory_map);
+    writeln!(w, "{:?}", status).unwrap();
+
+    let mut total_memory_pages = 0;
+    for e in memory_map.iter() {
+        if e.memory_type != EfiMemoryType::CONVENTIONAL_MEMORY {
+            continue;
+        }
+        total_memory_pages += e.number_of_pages;
+        writeln!(w, "{:?}", e).unwrap();
     }
+    // 4096は1ページのサイズ
+    // 1024で割ると1KiBでさらに1024で割ると1MiB
+    let total_memory_size_mib = total_memory_pages * 4096 / 1024 / 1024;
+    writeln!(
+        w,
+        "Total: {total_memory_pages} pages = {total_memory_size_mib} MiB"
+    )
+    .unwrap();
 
-    let grid_size = 32;
-    let rect_size = grid_size * 8;
-    // rect_sizeまでをgrid_size飛ばしでループ
-    for i in (0..=rect_size).step_by(grid_size as usize) {
-        // 横の赤線(0xff0000)を引く
-        let _ = draw_line(&mut vram, 0xff0000, 0, i, rect_size, i);
-        // 縦の赤線(0xff0000)を引く
-        let _ = draw_line(&mut vram, 0xff0000, i, 0, i, rect_size);
-    }
-
-    let cx = rect_size / 2;
-    let cy = rect_size / 2;
-    for i in (0..=rect_size).step_by(grid_size as usize) {
-        let _ = draw_line(&mut vram, 0xffff00, cx, cy, 0, i);
-        let _ = draw_line(&mut vram, 0x00ffff, cx, cy, i, 0);
-        let _ = draw_line(&mut vram, 0xff00ff, cx, cy, rect_size, i);
-        let _ = draw_line(&mut vram, 0xffffff, cx, cy, i, rect_size);
-    }
-
-    for (i, c) in "ABCDEF".chars().enumerate() {
-        draw_font_fg(&mut vram, i as i64 * 16 + 256, i as i64 * 16, 0xffffff, c);
-    }
-
-    // println!("Hello, world!");
-    draw_str_fg(&mut vram, 256, 256, 0xffffff, "Hello, World!");
-
+    exit_from_efi_boot_services(image_handle, efi_system_table, &mut memory_map);
+    writeln!(w, "Hello, Non-UEFI world!").unwrap();
     loop {
         hlt();
     }
@@ -374,4 +483,75 @@ fn draw_str_fg<T: Bitmap>(buf: &mut T, x: i64, y: i64, color: u32, s: &str) {
     for (i, c) in s.chars().enumerate() {
         draw_font_fg(buf, x + i as i64 * 8, y, color, c)
     }
+}
+
+struct VramTextWriter<'a> {
+    vram: &'a mut VramBufferInfo,
+    // 出力する位置を変数として持つ
+    cursor_x: i64,
+    cursor_y: i64,
+}
+
+impl<'a> VramTextWriter<'a> {
+    fn new(vram: &'a mut VramBufferInfo) -> Self {
+        Self {
+            vram,
+            cursor_x: 0,
+            cursor_y: 0,
+        }
+    }
+}
+
+impl fmt::Write for VramTextWriter<'_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for c in s.chars() {
+            if c == '\n' {
+                // 一行下に移動
+                self.cursor_y += 16;
+                self.cursor_x = 0;
+                continue;
+            }
+            draw_font_fg(self.vram, self.cursor_x, self.cursor_y, 0xffffff, c);
+            // スペースを空ける
+            self.cursor_x += 8;
+        }
+        Ok(())
+    }
+}
+
+// exit_boot_services()を呼び出すためのラッパー関数
+fn exit_from_efi_boot_services(
+    image_handle: EfiHandle,
+    efi_system_table: &EfiSystemTable,
+    memory_map: &mut MemoryMapHolder,
+) {
+    loop {
+        let status = efi_system_table.boot_services.get_memory_map(memory_map);
+        assert_eq!(status, EfiStatus::Success);
+        let status =
+            (efi_system_table.boot_services.exit_boot_services)(image_handle, memory_map.map_key);
+        if status == EfiStatus::Success {
+            break;
+        }
+    }
+}
+
+fn draw_test_pattern<T: Bitmap>(buf: &mut T) {
+    let w = 128;
+    let left = buf.width() - w - 1;
+    let colors = [0x000000, 0xff0000, 0x00ff00, 0x0000ff];
+    let h = 64;
+    for (i, c) in colors.iter().enumerate() {
+        let y = i as i64 * h;
+        fill_rect(buf, *c, left, y, h, h).expect("fill_rect failed");
+        fill_rect(buf, !*c, left + h, y, h, h).expect("fill_rect failed");
+    }
+    let points = [(0, 0), (0, w), (w, 0), (w, w)];
+    for (x0, y0) in &points {
+        for (x1, y1) in &points {
+            let _ = draw_line(buf, 0xffffff, left + *x0, *y0, left + *x1, *y1);
+        }
+    }
+    draw_str_fg(buf, left, h * colors.len() as i64, 0x00ff00, "0123456789");
+    draw_str_fg(buf, left, h * colors.len() as i64 + 16, 0x00ff00, "ABCDEF");
 }
