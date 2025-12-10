@@ -7,3 +7,7 @@ edition = "2021"
 
 [workspace]
 members = ["."]
+
+[[bin]]
+name = "wasabi"
+test = false
