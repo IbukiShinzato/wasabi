@@ -57,6 +57,7 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
 
     exit_from_efi_boot_services(image_handle, efi_system_table, &mut memory_map);
     writeln!(w, "Hello, Non-UEFI world!").unwrap();
+
     loop {
         hlt();
     }
