@@ -17,6 +17,7 @@ use core::ptr::null_mut;
 
 // v以上の最も近い2のべき乗を求める関数
 pub fn round_up_to_nearest_pow2(v: usize) -> Result<usize> {
+    // vが0ならError
     1_usize
         .checked_shl(usize::BITS - v.wrapping_sub(1).leading_zeros())
         .ok_or("Out of range")
@@ -241,5 +242,194 @@ impl FirstFitAllocator {
         // 3. 新しい先頭のnext_headerを、以前の先頭（prev_last）に繋ぎ直す。
         let mut header = self.first_header.borrow_mut();
         header.as_mut().unwrap().next_header = prev_last;
+    }
+}
+
+// 指定した数字以上で一番2の累乗に近い値を返す
+#[test_case]
+fn round_up_to_nearest_pow2_tests() {
+    assert_eq!(round_up_to_nearest_pow2(0), Err("Out of range"));
+    assert_eq!(round_up_to_nearest_pow2(1), Ok(1));
+    assert_eq!(round_up_to_nearest_pow2(2), Ok(2));
+    assert_eq!(round_up_to_nearest_pow2(3), Ok(4));
+    assert_eq!(round_up_to_nearest_pow2(4), Ok(4));
+    assert_eq!(round_up_to_nearest_pow2(5), Ok(8));
+    assert_eq!(round_up_to_nearest_pow2(6), Ok(8));
+    assert_eq!(round_up_to_nearest_pow2(7), Ok(8));
+    assert_eq!(round_up_to_nearest_pow2(8), Ok(8));
+    assert_eq!(round_up_to_nearest_pow2(9), Ok(16));
+    assert_eq!(round_up_to_nearest_pow2(10), Ok(16));
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use alloc::vec;
+
+    // 大量の確保と解放を繰り返しテスト（Dropによる自動解放を検証）
+    #[test_case]
+    fn malloc_iterate_free_and_alloc() {
+        use alloc::vec::Vec;
+        for i in 0..1000 {
+            let mut vec = Vec::new();
+            // new_lenを超える場合はvalueで埋めて、超えない場合は左からi番目までを切り取る
+            vec.resize(i, 10);
+        }
+    }
+
+    // アラインメントを大きくしながらallocしてみて正しく動作していることを確認する（教科書）
+    // 要求しているアラインメントの倍数にメモリ配置の先頭アドレスが対応しているかの確認
+    #[test_case]
+    fn malloc_align() {
+        // ヌルポインタを作成
+        let mut pointers = [null_mut::<u8>(); 100];
+        // アラインメントを作成（２の累乗）
+        for align in [1, 2, 4, 8, 16, 32, 4096] {
+            for e in pointers.iter_mut() {
+                // グローバルアロケータにメモリの確保を要求
+                *e = ALLOCATOR.alloc_with_options(
+                    Layout::from_size_align(1234, align).expect("Failed to create Layout"),
+                );
+                // アドレスが０を指していないか
+                assert!(*e as usize != 0);
+                // alignによってちゃんと丸められているか
+                assert!((*e as usize) % align == 0);
+            }
+        }
+    }
+
+    // ランダムのアラインメントにも対応しているかの確認
+    // 大小さまざまなアラインメントでallocしてみて正しく動作していることを確認する（教科書）
+    #[test_case]
+    fn malloc_align_random_order() {
+        for align in [32, 4096, 8, 4, 16, 2, 1] {
+            let mut pointers = [null_mut::<u8>(); 100];
+            for e in pointers.iter_mut() {
+                *e = ALLOCATOR.alloc_with_options(
+                    Layout::from_size_align(1234, align).expect("Failed to create Layout"),
+                );
+                // アドレスが０を指していないか
+                assert!(*e as usize != 0);
+                // alignによってちゃんと丸められているか
+                assert!((*e as usize) % align == 0);
+            }
+        }
+    }
+
+    // 確保した領域が重複していないことを確認する（教科書）
+    #[test_case]
+    fn allocated_objects_have_no_overlap() {
+        let allocations = [
+            Layout::from_size_align(128, 128).unwrap(),
+            Layout::from_size_align(32, 32).unwrap(),
+            Layout::from_size_align(8, 8).unwrap(),
+            Layout::from_size_align(16, 16).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(4, 4).unwrap(),
+            Layout::from_size_align(2, 2).unwrap(),
+            Layout::from_size_align(600000, 64).unwrap(),
+            Layout::from_size_align(64, 64).unwrap(),
+            Layout::from_size_align(1, 1).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(600000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(60000, 64).unwrap(),
+            Layout::from_size_align(60000, 64).unwrap(),
+            Layout::from_size_align(60000, 64).unwrap(),
+            Layout::from_size_align(60000, 64).unwrap(),
+        ];
+
+        // 確保とデータ書き込み
+        let mut pointers = vec![null_mut::<u8>(); allocations.len()];
+        // 確保
+        for e in allocations.iter().zip(pointers.iter_mut()).enumerate() {
+            let (i, (layout, pointer)) = e;
+            *pointer = ALLOCATOR.alloc_with_options(*layout);
+
+            // 書き込み
+            for k in 0..layout.size() {
+                // 確保したメモリ領域の全バイトをiで埋める
+                // addは現時点のアドレスから+kしたアドレスを返す
+                unsafe { *pointer.add(k) = i as u8 };
+            }
+        }
+
+        // データの検証（１回目）
+        for e in allocations.iter().zip(pointers.iter_mut()).enumerate() {
+            let (i, (layout, pointer)) = e;
+            for k in 0..layout.size() {
+                // 先ほど書き込んだiを指定したブロックに書かれているかの検証
+                // 重複があればデータが上書きされている
+                assert!(unsafe { *pointer.add(k) } == i as u8);
+            }
+        }
+
+        // 偶数番号（0,2,4,...)のブロック対象
+        // メモリ解放
+        for e in allocations
+            .iter()
+            .zip(pointers.iter_mut())
+            .enumerate()
+            .step_by(2)
+        {
+            let (_, (layout, pointer)) = e;
+            unsafe { ALLOCATOR.dealloc(*pointer, *layout) };
+        }
+
+        // 奇数番号（1,3,5,...)のブロック対象
+        // データの再検証
+        for e in allocations
+            .iter()
+            .zip(pointers.iter_mut())
+            .enumerate()
+            .skip(1)
+            .step_by(2)
+        {
+            let (i, (layout, pointer)) = e;
+            for k in 0..layout.size() {
+                // 奇数番目のブロックのデータが破壊されていないかの検証
+                assert!(unsafe { *pointer.add(k) } == i as u8);
+            }
+        }
+
+        // 偶数番号（0,2,4,...)のブロック対象
+        // メモリの再確保とデータ書き込み
+        for e in allocations
+            .iter()
+            .zip(pointers.iter_mut())
+            .enumerate()
+            .step_by(2)
+        {
+            let (i, (layout, pointer)) = e;
+            *pointer = ALLOCATOR.alloc_with_options(*layout);
+            for k in 0..layout.size() {
+                unsafe { *pointer.add(k) = i as u8 };
+            }
+        }
+
+        // 最終検証
+        for e in allocations.iter().zip(pointers.iter_mut()).enumerate() {
+            let (i, (layout, pointer)) = e;
+            for k in 0..layout.size() {
+                assert!(unsafe { *pointer.add(k) } == i as u8);
+            }
+        }
     }
 }
