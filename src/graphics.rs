@@ -1,5 +1,6 @@
 use crate::result::Result;
 use core::cmp::min;
+use spin::Mutex;
 
 pub trait Bitmap {
     fn bytes_per_pixel(&self) -> i64;
@@ -111,33 +112,49 @@ fn draw_line<T: Bitmap>(buf: &mut T, color: u32, x0: i64, y0: i64, x1: i64, y1: 
 }
 
 fn lookup_font(c: char) -> Option<[[char; 8]; 16]> {
-    // fileの中身を取得
+    // コンパイル時にフォントファイルをバイナリに埋め込む
     const FONT_SOURCE: &str = include_str!("./font.txt");
-    static mut FONT_CACHE: Option<[[[char; 8]; 16]; 256]> = None;
+    // フォントキャッシュ
+    // 全部で256文字
+    // [[char; 8]; 16]: 一文字分のフォント
+    // 誰でもstatic mutを書き換えることができるのでスレッド安全なMutexを使用
+    // staticなのでバイナリデータの一部として格納されているので一度つくられたら再度作られない
+    static FONT_CACHE: Mutex<Option<[[[char; 8]; 16]; 256]>> = Mutex::new(None);
 
+    // 文字をu8に変換
     if let Ok(c) = u8::try_from(c) {
-        let font = unsafe {
-            FONT_CACHE.get_or_insert_with(|| {
-                let mut font = [[['*'; 8]; 16]; 256];
-                let mut fi = FONT_SOURCE.split('\n');
-                while let Some(line) = fi.next() {
-                    if let Some(line) = line.strip_prefix("0x") {
-                        if let Ok(idx) = u8::from_str_radix(line, 16) {
-                            let mut glyph = [['*'; 8]; 16];
-                            for (y, line) in fi.clone().take(16).enumerate() {
-                                for (x, c) in line.chars().enumerate() {
-                                    if let Some(e) = glyph[y].get_mut(x) {
+        // Mutexをロックして中身を取得
+        let mut cache = FONT_CACHE.lock();
+
+        // cacheからすでにフォントがあれば配列から取得できる
+        let font = cache.get_or_insert_with(|| {
+            let mut font = [[['*'; 8]; 16]; 256];
+            let mut fi = FONT_SOURCE.split('\n');
+            while let Some(line) = fi.next() {
+                // "0x"を切り取ってからスタート
+                if let Some(line) = line.strip_prefix("0x") {
+                    // 16進数を10進数変換
+                    if let Ok(idx) = u8::from_str_radix(line, 16) {
+                        // フォントの初期化
+                        let mut glyph = [['*'; 8]; 16];
+
+                        // １行ずつ取得
+                        for glypy_y in glyph.iter_mut() {
+                            if let Some(font_line) = fi.next() {
+                                // 1文字ずつ取得
+                                for (x, c) in font_line.chars().enumerate() {
+                                    if let Some(e) = glypy_y.get_mut(x) {
                                         *e = c;
                                     }
                                 }
                             }
-                            font[idx as usize] = glyph;
                         }
+                        font[idx as usize] = glyph;
                     }
                 }
-                font
-            })
-        };
+            }
+            font
+        });
         Some(font[c as usize])
     } else {
         None
