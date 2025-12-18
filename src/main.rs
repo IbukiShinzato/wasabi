@@ -14,7 +14,6 @@ use wasabi::print::hexdump;
 use wasabi::println;
 use wasabi::qemu::exit_qemu;
 use wasabi::qemu::QemuExitCode;
-use wasabi::uefi::exit_from_efi_boot_services;
 use wasabi::uefi::init_vram;
 use wasabi::uefi::EfiHandle;
 use wasabi::uefi::EfiMemoryType;
@@ -42,9 +41,7 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
 
     let mut w = VramTextWriter::new(&mut vram);
 
-    // ターミナルデバッグ用
-    #[allow(unused_mut)]
-    let mut memory_map = init_basic_runtime(image_handle, efi_system_table);
+    let memory_map = init_basic_runtime(image_handle, efi_system_table);
 
     let mut total_memory_pages = 0;
     for e in memory_map.iter() {
@@ -63,12 +60,6 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     )
     .unwrap();
 
-    // ターミナルデバッグ用としてQEMUを即座に終了
-    exit_qemu(QemuExitCode::Success);
-
-    // ターミナルデバッグ用
-    #[allow(unreachable_code)]
-    exit_from_efi_boot_services(image_handle, efi_system_table, &mut memory_map);
     writeln!(w, "Hello, Non-UEFI world!").unwrap();
 
     loop {
