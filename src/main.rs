@@ -15,18 +15,25 @@ use wasabi::println;
 use wasabi::qemu::exit_qemu;
 use wasabi::qemu::QemuExitCode;
 use wasabi::uefi::init_vram;
+use wasabi::uefi::locate_loaded_image_protocol;
 use wasabi::uefi::EfiHandle;
 use wasabi::uefi::EfiMemoryType;
 use wasabi::uefi::EfiSystemTable;
 use wasabi::uefi::VramTextWriter;
 use wasabi::warn;
 use wasabi::x86::hlt;
+use wasabi::x86::init_exceptions;
+use wasabi::x86::trigger_debug_interrupt;
 
 #[no_mangle]
 fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     println!("Booting WasabiOS...");
     println!("image_handle: {:#018X}", image_handle);
     println!("efi_system_table: {:#p}", efi_system_table);
+    let loaded_image_protocol = locate_loaded_image_protocol(image_handle, efi_system_table)
+        .expect("Failed to get LoadedImageProtocol");
+    println!("image_base: {:#018X}", loaded_image_protocol.image_base);
+    println!("image_size: {:#018X}", loaded_image_protocol.image_size);
     info!("info");
     warn!("warn");
     error!("error");
@@ -61,6 +68,28 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     .unwrap();
 
     writeln!(w, "Hello, Non-UEFI world!").unwrap();
+
+    println!();
+    let cr3 = wasabi::x86::read_cr3();
+    println!("cr3 = {cr3:#p}");
+
+    // // ページテーブルの先頭アドレス(PML4)
+    // let t = Some(unsafe { &*cr3 });
+    // println!("{t:?}");
+    // // L３テーブル
+    // let t = t.and_then(|t| t.next_level(0));
+    // println!("{t:?}");
+    // // L2テーブル
+    // let t = t.and_then(|t| t.next_level(0));
+    // println!("{t:?}");
+    // // L1テーブル
+    // let t = t.and_then(|t| t.next_level(0));
+    // println!("{t:?}");
+
+    let (_gdt, _idt) = init_exceptions();
+    info!("Exception initialized!");
+    trigger_debug_interrupt();
+    info!("Execution continued.");
 
     loop {
         hlt();

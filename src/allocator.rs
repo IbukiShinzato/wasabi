@@ -30,7 +30,6 @@ struct Header {
     _reserved: usize,
 }
 const HEADER_SIZE: usize = size_of::<Header>(); // Header構造体自体のサイズ (32バイト)
-#[allow(clippy::assertions_on_constants)]
 const _: () = assert!(HEADER_SIZE == 32); // ヘッダーサイズが32バイトであることを保証
 const _: () = assert!(HEADER_SIZE.count_ones() == 1); // ヘッダーサイズが2のべき乗であることを保証
 pub const LAYOUT_PAGE_4K: Layout = unsafe { Layout::from_size_align_unchecked(4096, 4096) }; // 4KBページのレイアウト定義

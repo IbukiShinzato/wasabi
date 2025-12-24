@@ -94,17 +94,17 @@ macro_rules! println {
 // ログメッセージ
 #[macro_export]
 macro_rules! info {
-    ($($arg:tt)*) => ($crate::print!("[INFO]  {}:{:<3}: {}\n", file!(), line!(), format_args!($($arg)*)))
+    ($($arg:tt)*) => ($crate::print!("[INFO]  {}:{:<1}: {}\n", file!(), line!(), format_args!($($arg)*)))
 }
 
 // 警告メッセージ
 #[macro_export]
 macro_rules! warn {
-    ($($arg:tt)*) => ($crate::print!("[WARN]  {}:{:<3}: {}\n", file!(), line!(), format_args!($($arg)*)));
+    ($($arg:tt)*) => ($crate::print!("[WARN]  {}:{:<1}: {}\n", file!(), line!(), format_args!($($arg)*)));
 }
 
 // エラーメッセージ
 #[macro_export]
 macro_rules! error {
-    ($($arg:tt)*) => ($crate::print!("[ERROR] {}:{:<3}: {}\n", file!(), line!(), format_args!($($arg)*)));
+    ($($arg:tt)*) => ($crate::print!("[ERROR] {}:{:<1}: {}\n", file!(), line!(), format_args!($($arg)*)));
 }
